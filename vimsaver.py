@@ -10,6 +10,7 @@ import pprint
 import tempfile
 import os
 import shutil
+import logging
 
 PTYTuple = collections.namedtuple( 'PTYTuple', ['pty', 'parent', 'screen'] )
 PSTuple = collections.namedtuple(
@@ -18,6 +19,9 @@ VimTuple = collections.namedtuple(
     'VimTuple', ['idx', 'state', 'insert', 'path'] )
 
 PATTERN_HISTORY = re.compile( r'\s*(?P<idx>[0-9]*)\s*(?P<cli>.*)' )
+
+class TryAgainException( Exception ):
+    pass
 
 def list_pts() -> list:
     wp = subprocess.Popen( ['w'], stdout=subprocess.PIPE )
@@ -101,74 +105,57 @@ def list_vi_buffers( servername : str, bufferlist_proc : str ) -> list:
 # screen -S vimsaver -X screen
 # screen -S vimsaver -X stuff 'history -r xxx'
 
-def vim_command( servername : str, command : str ):
-    vimc = ['vim', '--servername', servername, '--remote-send', command]
-    vimp = psutil.Popen( vimc )
-
 def screen_command( sessionname : str, window : int, command : list ):
     screenc = ['screen', '-S', sessionname, '-X', '-p', str( window )] + command
     screenp = psutil.Popen( screenc )
 
 def screen_build_list( temp_dir : str, bufferlist : str ):
+
+    logger = logging.getLogger( 'screen.list' )
+
     screen_list = {}
     for pty in list_pts():
-        temp_hist = os.path.join( temp_dir, pty.pty.replace( '/', '_' ) )
-        vim_is_present = False
-        vim_is_in_insert = False
+
+        fg_proc =  None
+
         # Build the vim buffer list.
         for ps in list_ps_in_pty( pty.pty ):
             
             # TODO: Gracefully avoid other processes?
             #print( ps.cli )
-            #assert( 'vim' in ps.cli or 'bash' in ps.cli )
+
+            if -1 != ps.stat.find( '+' ):
+                fg_proc = ps
 
             if 'vim' in ps.cli[0] and '--servername' == ps.cli[1]:
                 # We only care about *named* vim sessions.
+                logger.debug( 'found vim "%s"', ps.cli[2] )
 
-                vim_is_present = True
+                # TODO: Skip or wait?
                 if 'T' == ps.stat:
-                    # Bring vim back to front!
-                    screen_command( 'vimsaver', pty.screen, ['stuff', 'fg^M'] )
+                    if fg_proc and -1 != fg_proc.cli[0].find( 'bash' ):
+                        # Bring vim back to front!
+                        logger.debug( 'resuming!' )
+                        screen_command( 'vimsaver', pty.screen, ['stuff',
+                            'fg^M'] )
+
+                        # Start from the beginning to see if vim was brought
+                        # forward.
+                        # TODO: Can we get the job number to make sure it is?
+                        raise TryAgainException()
+                    else:
+                        logger.warning( 'don\'t know how to suspend: %s',
+                            fg_proc )
+                        continue
 
                 vim_server = ps.cli[2]
                 vim_buffers = list_vi_buffers( vim_server, bufferlist )
-
-                # Determine buffer insert status for later.
-                for buf in vim_buffers:
-                    print( buf )
-                    if '+' == buf.insert:
-                        print( vim_server + ' is in insert' )
-                        #vim_is_in_insert = True
-                        vim_command( vim_server, '<Esc>' )
 
                 # Add vim buffers to list.
                 screen_list[pty.screen] = dict( ps._asdict() )
                 screen_list[pty.screen]['pty'] = dict( pty._asdict() )
                 screen_list[pty.screen]['buffers'] = \
                     {vim_server: [dict( x._asdict() ) for x in vim_buffers]}
-
-        # TODO: Handle vim being in insert.
-        assert( not vim_is_in_insert )
-        assert( vim_is_present )
-
-        if vim_is_present:
-            # Suspend foreground, grab bash history, resume foreground.
-            #if vim_is_in_insert:
-            #    screen_command( 'vimsaver', pty.screen, ['stuff', '^C'] )
-            screen_command( 'vimsaver', pty.screen, ['stuff', '^Z'] )
-
-            # TODO: Check if bash is in foreground before executing this.
-            screen_command( 'vimsaver', pty.screen,
-                ['stuff', ' history > ' + temp_hist + '^M'] )
-
-            screen_command( 'vimsaver', pty.screen, ['stuff', 'fg^M'] )
-
-        with open( temp_hist, 'r' ) as temp_hist_f:
-            screen_list[pty.screen]['history'] = []
-            for line in temp_hist_f.readlines():
-                match = PATTERN_HISTORY.match( line )
-                #print( match.groupdict() )
-                screen_list[pty.screen]['history'].append( match.groupdict() )
 
     return screen_list
 
@@ -179,15 +166,38 @@ def main():
     parser.add_argument( '-b', '--bufferlist', default='BufferList',
         help='Name of vim user function to retrieve buffer list.' )
 
+    parser.add_argument( '-v', '--verbose', action='store_true' )
+
+    parser.add_argument( '-o', '--out', default='vimsaver.json' )
+
     args = parser.parse_args()
 
-    temp_dir = tempfile.mkdtemp( prefix='vimsaver' )
-    try:
-        screen_list = screen_build_list( temp_dir, args.bufferlist )
-    finally:
-        shutil.rmtree( temp_dir )
+    log_level = logging.WARN
+    if args.verbose:
+        log_level = logging.DEBUG
+    logging.basicConfig( level=log_level )
+    logger = logging.getLogger( 'main' )
 
-    pprint.pprint( screen_list )
+    temp_dir = ''
+    #temp_dir = tempfile.mkdtemp( prefix='vimsaver' )
+    #logger.debug( 'created temp dir: %s', temp_dir )
+    done_trying = False
+    while not done_trying:
+        done_trying = True
+        try:
+            screen_list = screen_build_list( temp_dir, args.bufferlist )
+        except TryAgainException:
+            logger.debug( 'we should try again!' )
+            done_trying = False
+        finally:
+            #logger.debug( 'removing temp dir: %s', temp_dir )
+            #shutil.rmtree( temp_dir )
+            pass
+
+    #pprint.pprint( screen_list )
+
+    with open( args.out, 'w' ) as out_f:
+        out_f.write( json.dumps( screen_list ) )
 
 if '__main__' == __name__:
     main()

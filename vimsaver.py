@@ -17,10 +17,14 @@ PTYTuple = collections.namedtuple( 'PTYTuple', ['pty', 'parent', 'screen'] )
 PSTuple = collections.namedtuple(
     'PSTuple', ['pid', 'pty', 'stat', 'cli', 'pwd'] )
 VimTuple = collections.namedtuple(
-    'VimTuple', ['idx', 'state', 'insert', 'path'] )
+    'VimTuple', ['idx', 'stat', 'insert', 'path', 'line'] )
 ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
 
 PATTERN_HISTORY = re.compile( r'\s*(?P<idx>[0-9]*)\s*(?P<cli>.*)' )
+PATTERN_PS = re.compile(
+    r'\s*(?P<pid>[0-9]+)\s*(?P<pty>[a-zA-Z0-9\/]+)\s*(?P<stat>\S+)\s*(?P<cli>.*)' )
+PATTERN_BUFFERLIST = re.compile(
+    r'\s*(?P<idx>[0-9]+)\s*(?P<stat>\S+)\s*(?P<insert>[+ ])\s*"(?P<path>.+)"\s*line (?P<line>[0-9]+)' )
 
 class TryAgainException( Exception ):
     pass
@@ -57,29 +61,28 @@ def list_ps_in_pty( pty : str ) -> list:
     # Process raw ps command output.
     lines_out = []
     for line in psp.stdout.readlines():
-        # TODO: Use re.match.
-        line = re.split( r'\s+', line.decode( 'utf-8' ) )[1:-1]
-
-        # Weed out headers and empty columns.
-        if 'PID' == line[0]:
+        match = PATTERN_PS.match( line.decode( 'utf-8' ) )
+        if not match:
             continue
-        assert( line[1] == pty )
-        assert( line[0].isnumeric() )
+        match = match.groupdict()
 
         try:
             # Get PWD.
-            pwdp = subprocess.Popen( ['pwdx', line[0]], stdout=subprocess.PIPE )
+            pwdp = subprocess.Popen(
+                ['pwdx', match['pid']], stdout=subprocess.PIPE )
+            pwd_out = pwdp.stdout.read().decode( 'utf-8' )
 
             lines_out.append(
-                PSTuple( int( line[0] ), line[1], line[2], line[3:],
-                pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )[1].strip() ) )
+                PSTuple(
+                    int( match['pid'] ), match['pty'], match['stat'],
+                    match['cli'].split( ' ' ),
+                    pwd_out.split( ' ' )[1].strip() ) )
         except IndexError as e:
             logger.exception( e )
-        
 
     return lines_out
 
-def list_vi_buffers( servername : str, bufferlist_proc : str ) -> list:
+def list_vi_buffers( servername : str, bufferlist_proc : str, show_h : bool = False ) -> list:
 
     vip = subprocess.Popen(
         ['vim', '--remote-expr', bufferlist_proc + '()',
@@ -89,24 +92,26 @@ def list_vi_buffers( servername : str, bufferlist_proc : str ) -> list:
     lines_out = []
     for line in vip.stdout.readlines():
         # TODO: Use re.match.
-        line = [x.strip( '"' ) for x in \
-            re.split( r'\s+', line.decode( 'utf-8' ) )[1:-3]]
+        match = PATTERN_BUFFERLIST.match( line.decode( 'utf-8' ) )
+        if not match:
+            continue
+        match = match.groupdict()
 
-        if 0 == len( line ):
+        if 'h' == match['stat'] and not show_h:
             continue
 
         # Make index a number.
-        assert( line[0].isnumeric() )
-        line[0] = int( line[0] )
+        match['idx'] = int( match['idx'] )
 
         # Account for buffer modes.
-        if len( line ) == 2:
-            line.insert( 1, '' )
-        if len( line ) == 3:
+        if ' ' == match['insert']:
             # Vim is in insert mode?
-            line.insert( 2, '-' )
+            match['insert'] = '-'
 
-        lines_out.append( VimTuple( *line ) )
+        if '[No Name]' == match['path']:
+            match['path'] = None
+
+        lines_out.append( VimTuple( **match ) )
 
     return lines_out
 
@@ -129,7 +134,6 @@ def list_screen_windows( session : str ):
         
         word_idx += 1
 
-    print( lines_out )
     return lines_out
 
 def screen_command( sessionname : str, window : int, command : list ):
@@ -142,6 +146,8 @@ def screen_command( sessionname : str, window : int, command : list ):
 def screen_build_list( temp_dir : str, bufferlist : str, session : str ):
 
     logger = logging.getLogger( 'list.screen' )
+
+    logger.debug( 'building screen list...' )
 
     screen_list = {}
     for pty in list_pts():
@@ -195,6 +201,7 @@ def do_save( **kwargs ):
     #temp_dir = tempfile.mkdtemp( prefix='vimsaver' )
     #logger.debug( 'created temp dir: %s', temp_dir )
     done_trying = False
+    screen_list = []
     while not done_trying:
         done_trying = True
         try:

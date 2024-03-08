@@ -11,12 +11,14 @@ import tempfile
 import os
 import shutil
 import logging
+import time
 
 PTYTuple = collections.namedtuple( 'PTYTuple', ['pty', 'parent', 'screen'] )
 PSTuple = collections.namedtuple(
     'PSTuple', ['pid', 'pty', 'stat', 'cli', 'pwd'] )
 VimTuple = collections.namedtuple(
     'VimTuple', ['idx', 'state', 'insert', 'path'] )
+ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
 
 PATTERN_HISTORY = re.compile( r'\s*(?P<idx>[0-9]*)\s*(?P<cli>.*)' )
 
@@ -108,15 +110,36 @@ def list_vi_buffers( servername : str, bufferlist_proc : str ) -> list:
 
     return lines_out
 
-# vim -servername x -p f1 f2
-# screen -S vimsaver -X screen
-# screen -S vimsaver -X stuff 'history -r xxx'
+def list_screen_windows( session : str ):
+
+    screenp = subprocess.Popen(
+        ['screen', '-Q', 'windows'], stdout=subprocess.PIPE )
+
+    lines_out = []
+    word_idx = 0
+    line = re.split( r'\s+', screenp.stdout.read().decode( 'utf-8' ) )
+    prev_word = ''
+    for word in line:
+
+        if 0 == word_idx % 2:
+            prev_word = word.strip( '*$' )
+            prev_word = word.strip( '-' )
+        else:
+            lines_out.append( ScreenWinTuple( prev_word, word ) )
+        
+        word_idx += 1
+
+    print( lines_out )
+    return lines_out
 
 def screen_command( sessionname : str, window : int, command : list ):
-    screenc = ['screen', '-S', sessionname, '-X', '-p', str( window )] + command
-    screenp = psutil.Popen( screenc )
+    screenc = ['screen', '-S', sessionname, '-X']
+    if 0 <= window:
+        screenc += ['-p', str( window )]
+    screenc += command
+    screenp = subprocess.run( screenc )
 
-def screen_build_list( temp_dir : str, bufferlist : str ):
+def screen_build_list( temp_dir : str, bufferlist : str, session : str ):
 
     logger = logging.getLogger( 'list.screen' )
 
@@ -143,7 +166,7 @@ def screen_build_list( temp_dir : str, bufferlist : str ):
                     if fg_proc and -1 != fg_proc.cli[0].find( 'bash' ):
                         # Bring vim back to front!
                         logger.debug( 'resuming!' )
-                        screen_command( 'vimsaver', pty.screen, ['stuff',
+                        screen_command( session, pty.screen, ['stuff',
                             'fg^M'] )
 
                         # Start from the beginning to see if vim was brought
@@ -166,24 +189,7 @@ def screen_build_list( temp_dir : str, bufferlist : str ):
 
     return screen_list
 
-def main():
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument( '-b', '--bufferlist', default='BufferList',
-        help='Name of vim user function to retrieve buffer list.' )
-
-    parser.add_argument( '-v', '--verbose', action='store_true' )
-
-    parser.add_argument( '-o', '--out', default='vimsaver.json' )
-
-    args = parser.parse_args()
-
-    log_level = logging.WARN
-    if args.verbose:
-        log_level = logging.DEBUG
-    logging.basicConfig( level=log_level )
-    logger = logging.getLogger( 'main' )
+def do_save( **kwargs ):
 
     temp_dir = ''
     #temp_dir = tempfile.mkdtemp( prefix='vimsaver' )
@@ -192,7 +198,8 @@ def main():
     while not done_trying:
         done_trying = True
         try:
-            screen_list = screen_build_list( temp_dir, args.bufferlist )
+            screen_list = screen_build_list(
+                temp_dir, kwargs['bufferlist'], kwargs['session'] )
         except TryAgainException:
             logger.debug( 'we should try again!' )
             done_trying = False
@@ -203,8 +210,89 @@ def main():
 
     #pprint.pprint( screen_list )
 
-    with open( args.out, 'w' ) as out_f:
-        out_f.write( json.dumps( screen_list ) )
+    with open( kwargs['outfile'], 'w' ) as outfile_f:
+        outfile_f.write( json.dumps( screen_list ) )
+
+def do_load( **kwargs ):
+
+    logger = logging.getLogger( 'load' )
+
+    # TODO: Make sure session doesn't exist!
+    #screenp = subprocess.run( ['screen', '-d', '-m', '-S', kwargs['session']] )
+
+    with open( kwargs['infile'], 'r' ) as infile_f:
+
+        screen_state = json.loads( infile_f.read() )
+
+        for screen in screen_state:
+            pwd = screen_state[screen]['pwd']
+
+            # Create window if missing.
+            if screen not in [
+            w.idx for w in list_screen_windows( kwargs['session'] )]:
+                logger.debug( 'window %s not present yet...', screen )
+                logger.debug( 'opening window %s in screen...', screen )
+                screen_command( kwargs['session'], -1, ['screen', screen] )
+
+            # Reopen vim buffers.
+            for server in screen_state[screen]['buffers']:
+                buffer_list = ' '.join(
+                    [b['path'] for b in \
+                        screen_state[screen]['buffers'][server]] )
+
+                logger.debug( 'switching screen %s to cwd: %s', server, pwd )
+                screen_command( kwargs['session'], int( screen ), ['stuff',
+                    'cd {}^M'.format( pwd )] )
+
+                #time.sleep( 1 )
+
+                logger.debug( 'opening buffers in screen %s vim: %s',
+                    server, buffer_list )
+                screen_command( kwargs['session'], int( screen ), ['stuff',
+                    'vim --servername {} -p {}^M'.format(
+                        server, buffer_list )] )
+
+                #time.sleep( 1 )
+
+
+                #time.sleep( 1 )
+
+def main():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument( '-v', '--verbose', action='store_true' )
+
+    parser.add_argument( '-s', '--session', action='store', default='vimsave',
+        help='Use this session name for vim and screen.' )
+
+    subparsers = parser.add_subparsers( required=True )
+
+    parser_save = subparsers.add_parser( 'save' )
+
+    parser_save.add_argument( '-b', '--bufferlist', default='BufferList',
+        help='Name of vim user function to retrieve buffer list.' )
+
+    parser_save.add_argument( '-o', '--outfile', default='vimsaver.json' )
+
+    parser_save.set_defaults( func=do_save )
+
+    parser_load = subparsers.add_parser( 'load' )
+
+    parser_load.add_argument( '-i', '--infile', default='vimsaver.json' )
+
+    parser_load.set_defaults( func=do_load )
+
+    args = parser.parse_args()
+
+    log_level = logging.WARN
+    if args.verbose:
+        log_level = logging.DEBUG
+    logging.basicConfig( level=log_level )
+    logger = logging.getLogger( 'main' )
+
+    args_arr = vars( args )
+    args.func( **args_arr )
 
 if '__main__' == __name__:
     main()

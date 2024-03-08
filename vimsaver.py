@@ -47,6 +47,8 @@ def list_ps_in_pty( pty : str ) -> list:
     ''' Return a named tuple containing a list of processes running in the
     given PTY. '''
 
+    logger = logging.getLogger( 'list.ps' )
+
     psp = subprocess.Popen(
         ['ps', '-t', pty, '-o', 'pid,tty,stat,args'], stdout=subprocess.PIPE )
 
@@ -62,11 +64,16 @@ def list_ps_in_pty( pty : str ) -> list:
         assert( line[1] == pty )
         assert( line[0].isnumeric() )
 
-        # Get PWD.
-        pwdp = subprocess.Popen( ['pwdx', line[0]], stdout=subprocess.PIPE )
+        try:
+            # Get PWD.
+            pwdp = subprocess.Popen( ['pwdx', line[0]], stdout=subprocess.PIPE )
 
-        lines_out.append( PSTuple( int( line[0] ), line[1], line[2], line[3:],
-            pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )[1].strip() ) )
+            lines_out.append(
+                PSTuple( int( line[0] ), line[1], line[2], line[3:],
+                pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )[1].strip() ) )
+        except IndexError as e:
+            logger.exception( e )
+        
 
     return lines_out
 
@@ -111,7 +118,7 @@ def screen_command( sessionname : str, window : int, command : list ):
 
 def screen_build_list( temp_dir : str, bufferlist : str ):
 
-    logger = logging.getLogger( 'screen.list' )
+    logger = logging.getLogger( 'list.screen' )
 
     screen_list = {}
     for pty in list_pts():

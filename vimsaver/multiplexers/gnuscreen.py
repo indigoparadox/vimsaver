@@ -7,6 +7,10 @@ from vimsaver.multiplexers import Multiplexer
 
 ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
 
+PATTERN_PTS_SCREEN = re.compile( r':\S*:S.(?P<screen>[0-9]*)' )
+PATTERN_SCREEN_NUMBER = re.compile(
+    r'(?P<idx>[0-9]*)\s*\((?P<title>[A-Za-z0-9]*)\)' )
+
 class GNUScreen( Multiplexer ):
 
     @staticmethod
@@ -14,8 +18,7 @@ class GNUScreen( Multiplexer ):
 
         logger = logging.getLogger( 'multiplexers.gnu_screen.window_from_pty' )
 
-        pty_screen = re.match(
-            r':\S*:S.(?P<screen>[0-9]*)', pty_from )
+        pty_screen = PATTERN_PTS_SCREEN.match( pty_from )
         if not pty_screen:
             return None
 
@@ -35,27 +38,27 @@ class GNUScreen( Multiplexer ):
         screenc += command
         screenp = subprocess.run( screenc )
 
-    def list_windows( self ):
+    def get_window_title( self, idx : int ):
 
         screenp = subprocess.Popen(
-            ['screen', '-S', self.session, '-Q', 'windows'],
+            ['screen', '-S', self.session, '-p', str( idx ), '-Q', 'number'],
             stdout=subprocess.PIPE )
 
         lines_out = []
         word_idx = 0
-        line = re.split( r'\s+', screenp.stdout.read().decode( 'utf-8' ) )
-        prev_word = ''
-        for word in line:
+        match = PATTERN_SCREEN_NUMBER.match(
+            screenp.stdout.read().decode( 'utf-8' ) )
 
-            if 0 == word_idx % 2:
-                prev_word = word.strip( '*$' )
-                prev_word = word.strip( '-' )
-            else:
-                lines_out.append( ScreenWinTuple( prev_word, word ) )
-            
-            word_idx += 1
+        if match:
+            return match.groupdict()['title']
 
-        return lines_out
+        return None
+
+    def set_window_title( self, idx : int, title : str ):
+
+        screenp = subprocess.Popen(
+            ['screen', '-S', self.session, '-p', idx, '-X', 'title', title],
+            stdout=subprocess.PIPE )
 
     def send_shell( self, command : list, window : int ):
         logger = logging.getLogger( 'multiplexers.gnu_screen.send_shell' )

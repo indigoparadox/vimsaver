@@ -42,6 +42,9 @@ def do_save( **kwargs ):
 
                 # TODO: Make sure pty is from screen with our session.
 
+                pty_screen = multiplexer_i.window_from_pty( pty.parent )
+                pty_title = multiplexer_i.get_window_title( pty_screen )
+
                 # Build the vim buffer list.
                 for ps in pty.list_ps():
                     
@@ -69,20 +72,18 @@ def do_save( **kwargs ):
                                 fg_proc )
                             continue
 
-                    pty_screen = multiplexer_i.window_from_pty( pty.parent )
-
                     for app in kwargs['appstates']:
                         if app.APPSTATE_CLASS.is_ps( ps ):
                             app_instance = app.APPSTATE_CLASS( ps, **kwargs )
 
                             buffers = app_instance.save_buffers()
-                            #screen_list[pty_screen] = ps
-                            screen_list[pty_screen] = {}
-                            screen_list[pty_screen]['pwd'] = ps['pwd']
-                            #screen_list[pty_screen]['pty'] = dict( pty )
-                            screen_list[pty_screen]['buffers'] = \
-                                {app_instance.server_name: \
+                            screen_list[pty_screen] = {
+                                'pwd': ps['pwd'],
+                                #'title': pty_title,
+                                'title': app_instance.server_name,
+                                'buffers': {app_instance.server_name: \
                                     [dict( x._asdict() ) for x in buffers]}
+                            }
 
         except vimsaver.TryAgainException:
             logger.debug( 'we should try again!' )
@@ -116,8 +117,12 @@ def do_load( **kwargs ):
             pwd = screen_state[screen]['pwd']
 
             # Create window if missing.
-            if screen not in [w.idx for w in multiplexer_i.list_windows()]:
+            if not multiplexer_i.get_window_title( screen ):
+                logger.debug( 'screen %s not found in window list', screen )
                 multiplexer_i.new_window( screen )
+
+            multiplexer_i.set_window_title(
+                screen, screen_state[screen]['title'] )
 
             # Reopen vim buffers.
             # TODO: Only if not already open!
@@ -127,14 +132,14 @@ def do_load( **kwargs ):
                         screen_state[screen]['buffers'][server]] )
 
                 logger.debug( 'switching screen %s to pwd: %s', server, pwd )
-                multiplexer_i.send_shell( ['cd', pwd], int( screen ) )
+                #multiplexer_i.send_shell( ['cd', pwd], int( screen ) )
 
                 logger.debug( 'opening buffers in screen %s vim: %s',
                     server, buffer_list )
-                multiplexer_i.send_shell(
-                    # TODO: Send shell command to start correct app.
-                    ['vim', '--servername', server, '-p'] + buffer_list,
-                    int( screen ) )
+                #multiplexer_i.send_shell(
+                #    # TODO: Send shell command to start correct app.
+                #    ['vim', '--servername', server, '-p'] + buffer_list,
+                #    int( screen ) )
 
 def do_quit( **kwargs ):
 

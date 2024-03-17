@@ -143,6 +143,10 @@ def screen_command( sessionname : str, window : int, command : list ):
     screenc += command
     screenp = subprocess.run( screenc )
 
+def vim_command( servername : str, command : str ):
+    vip = subprocess.run(
+        ['vim', '--remote-send', command, '--servername', servername] )
+
 def screen_build_list( temp_dir : str, bufferlist : str, session : str ):
 
     logger = logging.getLogger( 'list.screen' )
@@ -197,6 +201,8 @@ def screen_build_list( temp_dir : str, bufferlist : str, session : str ):
 
 def do_save( **kwargs ):
 
+    logger = logging.getLogger( 'save' )
+
     temp_dir = ''
     #temp_dir = tempfile.mkdtemp( prefix='vimsaver' )
     #logger.debug( 'created temp dir: %s', temp_dir )
@@ -242,6 +248,7 @@ def do_load( **kwargs ):
                 screen_command( kwargs['session'], -1, ['screen', screen] )
 
             # Reopen vim buffers.
+            # TODO: Only if not already open!
             for server in screen_state[screen]['buffers']:
                 buffer_list = ' '.join(
                     [b['path'] for b in \
@@ -251,18 +258,55 @@ def do_load( **kwargs ):
                 screen_command( kwargs['session'], int( screen ), ['stuff',
                     'cd {}^M'.format( pwd )] )
 
-                #time.sleep( 1 )
-
                 logger.debug( 'opening buffers in screen %s vim: %s',
                     server, buffer_list )
                 screen_command( kwargs['session'], int( screen ), ['stuff',
                     'vim --servername {} -p {}^M'.format(
                         server, buffer_list )] )
 
-                #time.sleep( 1 )
+def do_quit( **kwargs ):
 
+    logger = logging.getLogger( 'quit' )
 
-                #time.sleep( 1 )
+    for pty in list_pts():
+
+        fg_proc =  None
+
+        # Build the vim buffer list.
+        for ps in list_ps_in_pty( pty.pty ):
+            
+            if 'vim' in ps.cli[0] and '--servername' == ps.cli[1]:
+                # We only care about *named* vim sessions.
+                logger.debug( 'found vim "%s"', ps.cli[2] )
+
+                # TODO: Skip or wait?
+                if 'T' == ps.stat:
+                    if fg_proc and -1 != fg_proc.cli[0].find( 'bash' ):
+                        # Bring vim back to front!
+                        logger.debug( 'resuming!' )
+                        screen_command( session, pty.screen, ['stuff',
+                            'fg^M'] )
+
+                        # Start from the beginning to see if vim was brought
+                        # forward.
+                        # TODO: Can we get the job number to make sure it is?
+                        raise TryAgainException()
+                    else:
+                        logger.warning( 'don\'t know how to suspend: %s',
+                            fg_proc )
+                        continue
+
+                vim_server = ps.cli[2]
+
+                vim_command( vim_server, '<Esc>:wqa<CR>' )
+
+                raise TryAgainException()
+
+            elif -1 != ps.cli[0].find( 'bash' ) and \
+            -1 != ps.stat.find( '+' ):
+                logger.debug( 'quitting screen: %s', pty.screen )
+                screen_command( kwargs['session'],
+                    int( pty.screen ), ['stuff', 'exit^M'] )
 
 def main():
 
@@ -289,6 +333,10 @@ def main():
     parser_load.add_argument( '-i', '--infile', default='vimsaver.json' )
 
     parser_load.set_defaults( func=do_load )
+
+    parser_quit = subparsers.add_parser( 'quit' )
+
+    parser_quit.set_defaults( func=do_quit )
 
     args = parser.parse_args()
 

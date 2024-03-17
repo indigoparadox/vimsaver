@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import psutil
 import subprocess
 import re
 import collections
@@ -12,129 +11,11 @@ import os
 import shutil
 import logging
 import time
-
-PTYTuple = collections.namedtuple( 'PTYTuple', ['pty', 'parent', 'screen'] )
-PSTuple = collections.namedtuple(
-    'PSTuple', ['pid', 'pty', 'stat', 'cli', 'pwd'] )
-VimTuple = collections.namedtuple(
-    'VimTuple', ['idx', 'stat', 'insert', 'path', 'line'] )
-ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
+import vimsaver.multiplexers
+import vimsaver.psjobs as psjobs
+from importlib import import_module
 
 PATTERN_HISTORY = re.compile( r'\s*(?P<idx>[0-9]*)\s*(?P<cli>.*)' )
-PATTERN_PS = re.compile(
-    r'\s*(?P<pid>[0-9]+)\s*(?P<pty>[a-zA-Z0-9\/]+)\s*(?P<stat>\S+)\s*(?P<cli>.*)' )
-PATTERN_BUFFERLIST = re.compile(
-    r'\s*(?P<idx>[0-9]+)\s*(?P<stat>\S+)\s*(?P<insert>[+ ])\s*"(?P<path>.+)"\s*line (?P<line>[0-9]+)' )
-
-class TryAgainException( Exception ):
-    pass
-
-def list_pts() -> list:
-    wp = subprocess.Popen( ['w'], stdout=subprocess.PIPE )
-
-    lines_out = []
-    for line in wp.stdout.readlines():
-        # TODO: Use re.match.
-        line = re.split( r'\s+', line.decode( 'utf-8' ) )
-        if 3 > len( line ) or not line[2].startswith( ':pts' ):
-            continue
-
-        # Place the PTY running inside first, then the parent and screen socket.
-        pty_line = [line[1]]
-        pty_line += line[2].split( ':' )[1:]
-        pty_line[2] = int( pty_line[2].strip( 'S.' ) )
-
-        lines_out.append( PTYTuple( *pty_line ) )
-
-    return lines_out
-
-def list_ps_in_pty( pty : str ) -> list:
-
-    ''' Return a named tuple containing a list of processes running in the
-    given PTY. '''
-
-    logger = logging.getLogger( 'list.ps' )
-
-    psp = subprocess.Popen(
-        ['ps', '-t', pty, '-o', 'pid,tty,stat,args'], stdout=subprocess.PIPE )
-
-    # Process raw ps command output.
-    lines_out = []
-    for line in psp.stdout.readlines():
-        match = PATTERN_PS.match( line.decode( 'utf-8' ) )
-        if not match:
-            continue
-        match = match.groupdict()
-
-        try:
-            # Get PWD.
-            pwdp = subprocess.Popen(
-                ['pwdx', match['pid']], stdout=subprocess.PIPE )
-            pwd_out = pwdp.stdout.read().decode( 'utf-8' )
-
-            lines_out.append(
-                PSTuple(
-                    int( match['pid'] ), match['pty'], match['stat'],
-                    match['cli'].split( ' ' ),
-                    pwd_out.split( ' ' )[1].strip() ) )
-        except IndexError as e:
-            logger.exception( e )
-
-    return lines_out
-
-def list_vi_buffers( servername : str, bufferlist_proc : str, show_h : bool = False ) -> list:
-
-    vip = subprocess.Popen(
-        ['vim', '--remote-expr', bufferlist_proc + '()',
-            '--servername', servername],
-        stdout=subprocess.PIPE )
-
-    lines_out = []
-    for line in vip.stdout.readlines():
-        # TODO: Use re.match.
-        match = PATTERN_BUFFERLIST.match( line.decode( 'utf-8' ) )
-        if not match:
-            continue
-        match = match.groupdict()
-
-        if 'h' == match['stat'] and not show_h:
-            continue
-
-        # Make index a number.
-        match['idx'] = int( match['idx'] )
-
-        # Account for buffer modes.
-        if ' ' == match['insert']:
-            # Vim is in insert mode?
-            match['insert'] = '-'
-
-        if '[No Name]' == match['path']:
-            match['path'] = None
-
-        lines_out.append( VimTuple( **match ) )
-
-    return lines_out
-
-def list_screen_windows( session : str ):
-
-    screenp = subprocess.Popen(
-        ['screen', '-Q', 'windows'], stdout=subprocess.PIPE )
-
-    lines_out = []
-    word_idx = 0
-    line = re.split( r'\s+', screenp.stdout.read().decode( 'utf-8' ) )
-    prev_word = ''
-    for word in line:
-
-        if 0 == word_idx % 2:
-            prev_word = word.strip( '*$' )
-            prev_word = word.strip( '-' )
-        else:
-            lines_out.append( ScreenWinTuple( prev_word, word ) )
-        
-        word_idx += 1
-
-    return lines_out
 
 def screen_command( sessionname : str, window : int, command : list ):
     screenc = ['screen', '-S', sessionname, '-X']
@@ -147,55 +28,61 @@ def vim_command( servername : str, command : str ):
     vip = subprocess.run(
         ['vim', '--remote-send', command, '--servername', servername] )
 
-def screen_build_list( temp_dir : str, bufferlist : str, session : str ):
+def screen_build_list( **kwargs ):
 
     logger = logging.getLogger( 'list.screen' )
+
+    multiplexer = import_module( kwargs['multiplexer'] ).MULTIPLEXER_CLASS()
 
     logger.debug( 'building screen list...' )
 
     screen_list = {}
-    for pty in list_pts():
+    for pty in psjobs.list_pts():
 
         fg_proc =  None
 
+        # TODO: Make sure pty is from screen with our session.
+
         # Build the vim buffer list.
-        for ps in list_ps_in_pty( pty.pty ):
+        for ps in psjobs.list_ps_in_pty( pty['tty'] ):
             
             # TODO: Gracefully avoid other processes?
             #print( ps.cli )
 
-            if -1 != ps.stat.find( '+' ):
+            if -1 != ps['stat'].find( '+' ):
                 fg_proc = ps
 
-            if 'vim' in ps.cli[0] and '--servername' == ps.cli[1]:
-                # We only care about *named* vim sessions.
-                logger.debug( 'found vim "%s"', ps.cli[2] )
+            # TODO: Skip or wait?
+            if 'T' == ps['stat']:
+                if fg_proc and -1 != fg_proc.cli[0].find( 'bash' ):
+                    # Bring vim back to front!
+                    logger.debug( 'resuming!' )
+                    screen_command( session, pty.screen, ['stuff',
+                        'fg^M'] )
 
-                # TODO: Skip or wait?
-                if 'T' == ps.stat:
-                    if fg_proc and -1 != fg_proc.cli[0].find( 'bash' ):
-                        # Bring vim back to front!
-                        logger.debug( 'resuming!' )
-                        screen_command( session, pty.screen, ['stuff',
-                            'fg^M'] )
+                    # Start from the beginning to see if vim was brought
+                    # forward.
+                    # TODO: Can we get the job number to make sure it is?
+                    raise vimsaver.TryAgainException()
+                else:
+                    logger.warning( 'don\'t know how to suspend: %s',
+                        fg_proc )
+                    raise vimsaver.SkipException()
 
-                        # Start from the beginning to see if vim was brought
-                        # forward.
-                        # TODO: Can we get the job number to make sure it is?
-                        raise TryAgainException()
-                    else:
-                        logger.warning( 'don\'t know how to suspend: %s',
-                            fg_proc )
-                        continue
+            pty_screen = multiplexer.window_from_pty( pty['from'] )
 
-                vim_server = ps.cli[2]
-                vim_buffers = list_vi_buffers( vim_server, bufferlist )
+            for app in kwargs['appstates']:
+                if app.APPSTATE_CLASS.is_ps( ps ):
+                    app_instance = app.APPSTATE_CLASS( ps, **kwargs )
 
-                # Add vim buffers to list.
-                screen_list[pty.screen] = dict( ps._asdict() )
-                screen_list[pty.screen]['pty'] = dict( pty._asdict() )
-                screen_list[pty.screen]['buffers'] = \
-                    {vim_server: [dict( x._asdict() ) for x in vim_buffers]}
+                    buffers = app_instance.save_buffers()
+                    #screen_list[pty_screen] = ps
+                    screen_list[pty_screen] = {}
+                    screen_list[pty_screen]['pwd'] = ps['pwd']
+                    screen_list[pty_screen]['pty'] = dict( pty )
+                    screen_list[pty_screen]['buffers'] = \
+                        {app_instance.server_name: \
+                            [dict( x._asdict() ) for x in buffers]}
 
     return screen_list
 
@@ -203,7 +90,8 @@ def do_save( **kwargs ):
 
     logger = logging.getLogger( 'save' )
 
-    temp_dir = ''
+    multiplexer = import_module( kwargs['multiplexer'] )
+
     #temp_dir = tempfile.mkdtemp( prefix='vimsaver' )
     #logger.debug( 'created temp dir: %s', temp_dir )
     done_trying = False
@@ -211,9 +99,8 @@ def do_save( **kwargs ):
     while not done_trying:
         done_trying = True
         try:
-            screen_list = screen_build_list(
-                temp_dir, kwargs['bufferlist'], kwargs['session'] )
-        except TryAgainException:
+            screen_list = screen_build_list( **kwargs )
+        except vimsaver.TryAgainException:
             logger.debug( 'we should try again!' )
             done_trying = False
         finally:
@@ -230,8 +117,12 @@ def do_load( **kwargs ):
 
     logger = logging.getLogger( 'load' )
 
+    multiplexer = import_module( kwargs['multiplexer'] )
+
     # TODO: Make sure session doesn't exist!
     #screenp = subprocess.run( ['screen', '-d', '-m', '-S', kwargs['session']] )
+
+    multiplexer_i = multiplexer.MULTIPLEXER_CLASS( kwargs['session'] )
 
     with open( kwargs['infile'], 'r' ) as infile_f:
 
@@ -242,7 +133,7 @@ def do_load( **kwargs ):
 
             # Create window if missing.
             if screen not in [
-            w.idx for w in list_screen_windows( kwargs['session'] )]:
+            w.idx for w in multiplexer_i.list_windows()]:
                 logger.debug( 'window %s not present yet...', screen )
                 logger.debug( 'opening window %s in screen...', screen )
                 screen_command( kwargs['session'], -1, ['screen', screen] )
@@ -268,12 +159,14 @@ def do_quit( **kwargs ):
 
     logger = logging.getLogger( 'quit' )
 
-    for pty in list_pts():
+    multiplexer = import_module( kwargs['multiplexer'] )
+
+    for pty in psjobs.list_pts():
 
         fg_proc =  None
 
         # Build the vim buffer list.
-        for ps in list_ps_in_pty( pty.pty ):
+        for ps in psjobs.list_ps_in_pty( pty.pty ):
             
             if 'vim' in ps.cli[0] and '--servername' == ps.cli[1]:
                 # We only care about *named* vim sessions.
@@ -290,7 +183,7 @@ def do_quit( **kwargs ):
                         # Start from the beginning to see if vim was brought
                         # forward.
                         # TODO: Can we get the job number to make sure it is?
-                        raise TryAgainException()
+                        raise vimsaver.TryAgainException()
                     else:
                         logger.warning( 'don\'t know how to suspend: %s',
                             fg_proc )
@@ -300,7 +193,7 @@ def do_quit( **kwargs ):
 
                 vim_command( vim_server, '<Esc>:wqa<CR>' )
 
-                raise TryAgainException()
+                raise vimsaver.TryAgainException()
 
             elif -1 != ps.cli[0].find( 'bash' ) and \
             -1 != ps.stat.find( '+' ):
@@ -316,6 +209,14 @@ def main():
 
     parser.add_argument( '-s', '--session', action='store', default='vimsave',
         help='Use this session name for vim and screen.' )
+
+    parser.add_argument(
+        '-m', '--multiplexer', action='store',
+        default='vimsaver.multiplexers.gnuscreen' )
+
+    parser.add_argument(
+        '-a', '--appstates', action='append', type=import_module,
+        default=[import_module( 'vimsaver.appstates.vim' )] )
 
     subparsers = parser.add_subparsers( required=True )
 
@@ -339,6 +240,8 @@ def main():
     parser_quit.set_defaults( func=do_quit )
 
     args = parser.parse_args()
+
+    print( args )
 
     log_level = logging.WARN
     if args.verbose:

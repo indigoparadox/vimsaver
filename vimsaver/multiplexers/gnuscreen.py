@@ -2,23 +2,38 @@
 import re
 import subprocess
 import collections
+import logging
 from vimsaver.multiplexers import Multiplexer
 
 ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
 
 class GNUScreen( Multiplexer ):
 
-    @classmethod
-    def window_from_pty( self, pty_from : str ):
+    @staticmethod
+    def window_from_pty( pty_from : str ) -> int:
+
+        logger = logging.getLogger( 'multiplexers.gnu_screen.window_from_pty' )
 
         pty_screen = re.match(
             r':\S*:S.(?P<screen>[0-9]*)', pty_from )
         if not pty_screen:
             return None
-        return pty_screen.group( 'screen' )
+
+        window_num = int( pty_screen.group( 'screen' ) )
+
+        logger.debug( 'PTY %s is screen: %d', pty_from, window_num )
+
+        return window_num
 
     def __init__( self, session : str ):
         self.session = session
+
+    def screen_command( self, window : int, command : list ):
+        screenc = ['screen', '-S', self.session, '-X']
+        if 0 <= window:
+            screenc += ['-p', str( window )]
+        screenc += command
+        screenp = subprocess.run( screenc )
 
     def list_windows( self ):
 
@@ -41,6 +56,17 @@ class GNUScreen( Multiplexer ):
             word_idx += 1
 
         return lines_out
+
+    def send_shell( self, command : list, window : int ):
+        logger = logging.getLogger( 'multiplexers.gnu_screen.send_shell' )
+        logger.debug( 'sending shell command: %s', str( command ) )
+        command[-1] =  command[-1] + '^M'
+        self.screen_command( window, ['stuff'] + command )
+
+    def new_window( self, window : int ):
+        logger = logging.getLogger( 'multiplexers.gnu_screen.new_window' )
+        logger.debug( 'opening window %s in screen...', window )
+        self.screen_command( -1, ['screen', window] )
 
 MULTIPLEXER_CLASS = GNUScreen
 

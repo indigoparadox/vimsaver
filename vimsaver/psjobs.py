@@ -12,59 +12,65 @@ PATTERN_PS = re.compile(
 PSTuple = collections.namedtuple(
     'PSTuple', ['pid', 'pty', 'stat', 'cli', 'pwd'] )
 
-def list_pts() -> list:
+class PTY( object ):
 
-    logger = logging.getLogger( 'list.pts' )
+    @staticmethod
+    def list_all() -> list:
 
-    wp = subprocess.Popen( ['w', '-s'], stdout=subprocess.PIPE )
+        logger = logging.getLogger( 'list.pts' )
 
-    lines_out = []
-    for line in wp.stdout.readlines():
-        # TODO: Use re.match.
-        match = PATTERN_W.match( line.decode( 'utf-8' ) )
-        if not match:
-            continue
-        match = match.groupdict()
+        wp = subprocess.Popen( ['w', '-s'], stdout=subprocess.PIPE )
 
-        logger.debug( 'line: %s', str( match ) )
+        lines_out = []
+        for line in wp.stdout.readlines():
+            # TODO: Use re.match.
+            match = PATTERN_W.match( line.decode( 'utf-8' ) )
+            if not match:
+                continue
+            match = match.groupdict()
 
-        lines_out.append( match )
+            logger.debug( 'line: %s', str( match ) )
 
-    return lines_out
+            lines_out.append( PTY( **match ) )
 
-def list_ps_in_pty( pty : str ) -> list:
+        return lines_out
 
-    ''' Return a named tuple containing a list of processes running in the
-    given PTY. '''
+    def __init__( self, **kwargs ):
+        self.name = kwargs['tty']
+        self.parent = kwargs['from']
 
-    logger = logging.getLogger( 'list.ps' )
+    def list_ps( self ) -> list:
 
-    psp = subprocess.Popen(
-        ['ps', '-t', pty, '-o', 'pid,tty,stat,args'], stdout=subprocess.PIPE )
+        ''' Return a named tuple containing a list of processes running in the
+        given PTY. '''
 
-    # Process raw ps command output.
-    lines_out = []
-    for line in psp.stdout.readlines():
-        match = PATTERN_PS.match( line.decode( 'utf-8' ) )
-        if not match:
-            continue
-        match = match.groupdict()
+        logger = logging.getLogger( 'list.ps' )
 
-        try:
-            # Get PWD.
-            pwdp = subprocess.Popen(
-                ['pwdx', match['pid']], stdout=subprocess.PIPE )
-            match['pid'] = int( match['pid'] )
-            match['cli'] = match['cli'].split( ' ' ) # TODO: Use re.split.
-            match['pwd'] = \
-                pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )[1].strip()
+        psp = subprocess.Popen(
+            ['ps', '-t', self.name, '-o', 'pid,tty,stat,args'],
+            stdout=subprocess.PIPE )
 
-            print( match )
+        # Process raw ps command output.
+        lines_out = []
+        for line in psp.stdout.readlines():
+            match = PATTERN_PS.match( line.decode( 'utf-8' ) )
+            if not match:
+                continue
+            match = match.groupdict()
 
-            lines_out.append( match )
-        except IndexError as e:
-            logger.exception( e )
+            try:
+                # Get PWD.
+                pwdp = subprocess.Popen(
+                    ['pwdx', match['pid']], stdout=subprocess.PIPE )
+                match['pid'] = int( match['pid'] )
+                match['cli'] = match['cli'].split( ' ' ) # TODO: Use re.split.
+                match['pwd'] = \
+                    pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )[1].strip()
 
-    return lines_out
+                lines_out.append( match )
+            except IndexError as e:
+                logger.exception( e )
+
+        return lines_out
 
 

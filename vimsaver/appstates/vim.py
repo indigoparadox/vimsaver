@@ -18,8 +18,8 @@ class VimState( AppState ):
         self.server_name = ps['cli'][2]
         self.bufferlist_proc = kwargs['bufferlist']
 
-    @classmethod
-    def is_ps( self, ps : dict ):
+    @staticmethod
+    def is_ps( ps : dict ):
         logger = logging.getLogger( 'appstate.vim.ps' )
         if 'vim' in ps['cli'][0] and '--servername' == ps['cli'][1]:
             logger.debug( 'found vim: "%s"', ps['cli'][2] )
@@ -64,6 +64,13 @@ class VimState( AppState ):
             lines_out.append( VimTuple( **match ) )
 
         return lines_out
+
+    def _vim_command( servername : str, command : str ):
+        vip = subprocess.run(
+            ['vim', '--remote-send', command, '--servername', servername] )
+
+    def quit( self ):
+        self._vim_command( self.server_name, '<Esc>:wqa<CR>' )
 
 APPSTATE_CLASS = VimState
 

@@ -38,52 +38,54 @@ def do_save( **kwargs ):
             screen_list = {}
             for pty in psjobs.PTY.list_all():
 
-                fg_proc =  None
-
                 # TODO: Make sure pty is from screen with our session.
 
                 pty_screen = multiplexer_i.window_from_pty( pty.parent )
-                pty_title = multiplexer_i.get_window_title( pty_screen )
 
                 # Build the vim buffer list.
                 for ps in pty.list_ps():
                     
-                    # TODO: Gracefully avoid other processes?
-                    #print( ps.cli )
+                    try:
+                        for app in kwargs['appstates']:
+                            if not app.APPSTATE_CLASS.is_ps( ps ):
+                                continue
 
-                    if -1 != ps['stat'].find( '+' ):
-                        fg_proc = ps
+                            # Check if we need to resume the process.
+                            if ps.is_suspended():
+                                if pty.fg_ps().has_cli( 'bash' ):
+                                    logger.debug(
+                                        'attempting to resume %s...',
+                                        ps.cli[0] )
+                                    # Bring vim back to front!
+                                    multiplexer_i.send_shell(
+                                        ['fg'],
+                                        multiplexer_i.window_from_pty(
+                                            pty.parent ) )
 
-                    # TODO: Skip or wait?
-                    if 'T' == ps['stat']:
-                        if fg_proc and -1 != fg_proc['cli'][0].find( 'bash' ):
-                            # Bring vim back to front!
-                            multiplexer_i.send_shell(
-                                ['fg'],
-                                multiplexer_i.window_from_pty( pty.parent ) )
+                                    # Start from the beginning to see if vim was
+                                    # brought forward.
+                                    # TODO: Can we get the job number to make
+                                    #       sure it is?
+                                    raise vimsaver.TryAgainException()
+                                else:
+                                    logger.warning(
+                                        'don\'t know how to suspend: %s',
+                                        ps.cli[0] )
+                                    raise vimsaver.SkipException()
 
-                            # Start from the beginning to see if vim was brought
-                            # forward.
-                            # TODO: Can we get the job number to make sure it
-                            #       is?
-                            raise vimsaver.TryAgainException()
-                        else:
-                            logger.warning( 'don\'t know how to suspend: %s',
-                                fg_proc )
-                            continue
-
-                    for app in kwargs['appstates']:
-                        if app.APPSTATE_CLASS.is_ps( ps ):
+                            # Perform the save.
                             app_instance = app.APPSTATE_CLASS( ps, **kwargs )
 
                             buffers = app_instance.save_buffers()
                             screen_list[pty_screen] = {
-                                'pwd': ps['pwd'],
-                                #'title': pty_title,
+                                'pwd': ps.pwd,
+                                'app': app_instance.module_path,
                                 'title': app_instance.server_name,
                                 'buffers': {app_instance.server_name: \
                                     [dict( x._asdict() ) for x in buffers]}
                             }
+                    except vimsaver.SkipException:
+                        continue
 
         except vimsaver.TryAgainException:
             logger.debug( 'we should try again!' )
@@ -124,14 +126,26 @@ def do_load( **kwargs ):
             multiplexer_i.set_window_title(
                 screen, screen_state[screen]['title'] )
 
+            app = import_module( screen_state[screen]['app'] )
+
             # Reopen vim buffers.
             # TODO: Only if not already open!
             for server in screen_state[screen]['buffers']:
+
+                app_i = app.APPSTATE_CLASS(
+                    None, server_name=server, bufferlist=kwargs['bufferlist'] )
+
+                if app_i.is_server_open():
+                    logger.warning( '%s is already open...', server )
+                    continue
+
+                # Convert buffer list into command line.
                 buffer_list = ' '.join(
                     [b['path'] for b in \
                         screen_state[screen]['buffers'][server]] )
 
-                logger.debug( 'switching screen %s to pwd: %s', server, pwd )
+                logger.debug(
+                    'switching screen %s to pwd: %s', server, pwd )
                 #multiplexer_i.send_shell( ['cd', pwd], int( screen ) )
 
                 logger.debug( 'opening buffers in screen %s vim: %s',
@@ -201,12 +215,12 @@ def main():
         '-a', '--appstates', action='append', type=import_module,
         default=[import_module( 'vimsaver.appstates.vim' )] )
 
+    parser.add_argument( '-b', '--bufferlist', default='BufferList',
+        help='Name of vim user function to retrieve buffer list.' )
+
     subparsers = parser.add_subparsers( required=True )
 
     parser_save = subparsers.add_parser( 'save' )
-
-    parser_save.add_argument( '-b', '--bufferlist', default='BufferList',
-        help='Name of vim user function to retrieve buffer list.' )
 
     parser_save.add_argument( '-o', '--outfile', default='vimsaver.json' )
 

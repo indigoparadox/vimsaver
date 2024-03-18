@@ -62,15 +62,47 @@ class PTY( object ):
                 # Get PWD.
                 pwdp = subprocess.Popen(
                     ['pwdx', match['pid']], stdout=subprocess.PIPE )
-                match['pid'] = int( match['pid'] )
-                match['cli'] = match['cli'].split( ' ' ) # TODO: Use re.split.
                 match['pwd'] = \
                     pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )[1].strip()
 
-                lines_out.append( match )
+                lines_out.append( PS( **match ) )
             except IndexError as e:
                 logger.exception( e )
 
         return lines_out
 
+    def find_ps( self, command : str ):
+
+        logger = logging.getLogger( 'pty.find_ps' )
+
+        for ps in self.list_ps():
+            print( ps )
+
+        raise Exception()
+
+    def fg_ps( self ):
+        
+        for ps in self.list_ps():
+            
+            # TODO: Gracefully avoid other processes?
+            #print( ps.cli )
+
+            if -1 != ps.stat.find( '+' ):
+                return ps
+
+        return None
+
+class PS( object ):
+
+    def __init__( self, **kwargs ):
+        self.pid = int( kwargs['pid'] )
+        self.cli = kwargs['cli'].split( ' ' ) # TODO: Use re.split.
+        self.stat = kwargs['stat']
+        self.pwd = kwargs['pwd']
+
+    def is_suspended( self ):
+        return 'T' == self.stat
+
+    def has_cli( self, command : str ):
+        return -1 != self.cli[0].find( command )
 

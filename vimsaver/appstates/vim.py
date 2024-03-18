@@ -14,17 +14,42 @@ VimTuple = collections.namedtuple(
 
 class VimState( AppState ):
 
-    def __init__( self, ps, **kwargs ):
-        self.server_name = ps['cli'][2]
+    module_path = 'vimsaver.appstates.vim'
+
+    def __init__( self, ps : vimsaver.psjobs.PS, **kwargs ):
+        if ps:
+            self.server_name = ps.cli[2]
+        elif 'server_name' in kwargs:
+            self.server_name = kwargs['server_name']
+
         self.bufferlist_proc = kwargs['bufferlist']
 
     @staticmethod
     def is_ps( ps : dict ):
         logger = logging.getLogger( 'appstate.vim.ps' )
-        if 'vim' in ps['cli'][0] and '--servername' == ps['cli'][1]:
-            logger.debug( 'found vim: "%s"', ps['cli'][2] )
+        if 'vim' in ps.cli[0] and '--servername' == ps.cli[1]:
+            logger.debug( 'found vim: "%s"', ps.cli[2] )
             return True
         return False
+
+    def is_server_open( self ):
+        
+        try:
+            vip = subprocess.run(
+                ['vim', '--servername', self.server_name, '--remote-expr', '1'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=1 )
+
+            output = vip.stdout.decode( 'utf-8' ).strip()
+            if '1' == output:
+                return True
+        except subprocess.TimeoutExpired:
+            # The servername must be active but asleep.
+            return True
+
+        return False
+
+        raise Exception()
 
     def save_buffers( self ):
 

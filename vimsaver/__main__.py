@@ -146,14 +146,14 @@ def do_load( **kwargs ):
 
                 logger.debug(
                     'switching screen %s to pwd: %s', server, pwd )
-                #multiplexer_i.send_shell( ['cd', pwd], int( screen ) )
+                multiplexer_i.send_shell( ['cd', pwd], int( screen ) )
 
                 logger.debug( 'opening buffers in screen %s vim: %s',
                     server, buffer_list )
-                #multiplexer_i.send_shell(
-                #    # TODO: Send shell command to start correct app.
-                #    ['vim', '--servername', server, '-p'] + buffer_list,
-                #    int( screen ) )
+                multiplexer_i.send_shell(
+                    # TODO: Send shell command to start correct app.
+                    ['vim', '--servername', server, '-p'] + buffer_list,
+                    int( screen ) )
 
 def do_quit( **kwargs ):
 

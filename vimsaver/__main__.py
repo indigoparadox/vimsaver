@@ -140,9 +140,8 @@ def do_load( **kwargs ):
                     continue
 
                 # Convert buffer list into command line.
-                buffer_list = ' '.join(
-                    [b['path'] for b in \
-                        screen_state[screen]['buffers'][server]] )
+                buffer_list = [b['path'] for b in \
+                        screen_state[screen]['buffers'][server]]
 
                 logger.debug(
                     'switching screen %s to pwd: %s', server, pwd )

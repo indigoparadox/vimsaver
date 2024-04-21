@@ -32,10 +32,12 @@ class GNUScreen( Multiplexer ):
         self.session = session
 
     def screen_command( self, window : int, command : list ):
+        logger = logging.getLogger( 'multiplexers.gnu_screen.command' )
         screenc = ['screen', '-S', self.session, '-X']
         if 0 <= window:
             screenc += ['-p', str( window )]
         screenc += command
+        logger.debug( screenc )
         screenp = subprocess.run( screenc )
 
     def get_window_title( self, idx : int ):
@@ -64,7 +66,7 @@ class GNUScreen( Multiplexer ):
         logger = logging.getLogger( 'multiplexers.gnu_screen.send_shell' )
         logger.debug( 'sending shell command: %s', str( command ) )
         command[-1] =  command[-1] + '^M'
-        self.screen_command( window, ['stuff'] + command )
+        self.screen_command( window, ['stuff'] + [' '.join( command )] )
 
     def new_window( self, window : int ):
         logger = logging.getLogger( 'multiplexers.gnu_screen.new_window' )

@@ -38,13 +38,14 @@ def do_save( **kwargs ):
             screen_list = {}
             for pty in psjobs.PTY.list_all():
 
-                # TODO: Make sure pty is from screen with our session.
-
+                # Make sure pty is from screen with our session.
                 pty_screen = multiplexer_i.window_from_pty( pty.parent )
+                if 0 > pty_screen:
+                    continue
 
                 # Build the vim buffer list.
                 for ps in pty.list_ps():
-                    
+
                     try:
                         for app in kwargs['appstates']:
                             if not app.APPSTATE_CLASS.is_ps( ps ):
@@ -58,9 +59,7 @@ def do_save( **kwargs ):
                                         ps.cli[0] )
                                     # Bring vim back to front!
                                     multiplexer_i.send_shell(
-                                        ['fg'],
-                                        multiplexer_i.window_from_pty(
-                                            pty.parent ) )
+                                        ['fg'], pty_screen )
 
                                     # Start from the beginning to see if vim was
                                     # brought forward.
@@ -161,41 +160,52 @@ def do_quit( **kwargs ):
     multiplexer = import_module( kwargs['multiplexer'] )
     multiplexer_i = multiplexer.MULTIPLEXER_CLASS( kwargs['session'] )
 
-    for pty in psjobs.PTY.list_all():
+    done_trying = False
 
-        fg_proc =  None
+    while not done_trying:
+        done_trying = True
+        try:
+            screen_list = {}
+            for pty in psjobs.PTY.list_all():
+                
+                # Make sure pty is from screen with our session.
+                pty_screen = multiplexer_i.window_from_pty( pty.parent )
+                if 0 > pty_screen:
+                    continue
 
-        for ps in pty.list_ps():
-            
-            if 'vim' in ps['cli'][0] and '--servername' == ps['cli'][1]:
-                # We only care about *named* vim sessions.
-                logger.debug( 'found vim "%s"', ps['cli'][2] )
+                for ps in pty.list_ps():
+                    
+                    for app in kwargs['appstates']:
+                        if not app.APPSTATE_CLASS.is_ps( ps ):
+                            continue
 
-                # TODO: Skip or wait?
-                if 'T' == ps.stat:
-                    if fg_proc and -1 != fg_proc['cli'][0].find( 'bash' ):
-                        # Bring vim back to front!
-                        multiplexer_i.send_shell( ['fg'], pty.screen )
+                        # Check if we need to resume the process.
+                        if ps.is_suspended():
+                            if pty.fg_ps().has_cli( 'bash' ):
+                                logger.debug(
+                                    'attempting to resume %s...',
+                                    ps.cli[0] )
+                                # Bring vim back to front!
+                                multiplexer_i.send_shell( ['fg'], pty_screen )
+                                raise vimsaver.TryAgainException()
+                            else:
+                                logger.warning(
+                                    'don\'t know how to suspend: %s',
+                                    ps.cli[0] )
+                                raise vimsaver.SkipException()
 
-                        # Start from the beginning to see if vim was brought
-                        # forward.
-                        # TODO: Can we get the job number to make sure it is?
-                        raise vimsaver.TryAgainException()
-                    else:
-                        logger.warning( 'don\'t know how to suspend: %s',
-                            fg_proc )
-                        continue
+                        app_instance.quit()
 
-                vim_server = ps['cli'][2]
+                    if pty.fg_ps().has_cli( 'bash' ):
+                        logger.debug(
+                            'attempting to quit %s...',
+                            ps.cli[0] )
+                        multiplexer_i.send_shell(
+                            ['exit'], pty_screen )
 
-                vim_command( vim_server, '<Esc>:wqa<CR>' )
-
-                raise vimsaver.TryAgainException()
-
-            elif -1 != ps['cli'][0].find( 'bash' ) and \
-            -1 != ps.stat.find( '+' ):
-                logger.debug( 'quitting screen: %s', pty.screen )
-                multiplexer_i.send_shell( ['exit'], pty.screen )
+        except vimsaver.TryAgainException:
+            logger.debug( 'we should try again!' )
+            done_trying = False
 
 def main():
 
@@ -203,7 +213,7 @@ def main():
 
     parser.add_argument( '-v', '--verbose', action='store_true' )
 
-    parser.add_argument( '-s', '--session', action='store', default='vimsave',
+    parser.add_argument( '-s', '--session', action='store', default='vimsaver',
         help='Use this session name for vim and screen.' )
 
     parser.add_argument(

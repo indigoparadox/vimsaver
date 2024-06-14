@@ -15,7 +15,7 @@ PSTuple = collections.namedtuple(
 class PTY( object ):
 
     @staticmethod
-    def list_all() -> list:
+    def list_all():
 
         logger = logging.getLogger( 'list.pts' )
 
@@ -31,9 +31,31 @@ class PTY( object ):
 
             logger.debug( 'line: %s', str( match ) )
 
-            lines_out.append( PTY( **match ) )
+            yield PTY( **match )
 
-        return lines_out
+    @staticmethod
+    def find_ps( command : str ) -> list:
+
+        ''' Find all processes with "command" in their command line. '''
+
+        logger = logging.getLogger( 'pty.find_ps' )
+
+        psp = subprocess.Popen(
+            ['ps', '-a', '-o', 'pid,tty,stat,args'],
+            stdout=subprocess.PIPE )
+
+        # Process raw ps command output.
+        lines_out = []
+        for line in psp.stdout.readlines():
+            match = PATTERN_PS.match( line.decode( 'utf-8' ) )
+            if not match:
+                continue
+            match = match.groupdict()
+
+            if not command in match['cli']:
+                continue
+
+            yield PS( **match )
 
     def __init__( self, **kwargs ):
         self.name = kwargs['tty']
@@ -71,15 +93,6 @@ class PTY( object ):
 
         return lines_out
 
-    def find_ps( self, command : str ):
-
-        logger = logging.getLogger( 'pty.find_ps' )
-
-        for ps in self.list_ps():
-            print( ps )
-
-        raise Exception()
-
     def fg_ps( self ):
         
         for ps in self.list_ps():
@@ -96,9 +109,11 @@ class PS( object ):
 
     def __init__( self, **kwargs ):
         self.pid = int( kwargs['pid'] )
+        self.pty = kwargs['pty']
         self.cli = kwargs['cli'].split( ' ' ) # TODO: Use re.split.
         self.stat = kwargs['stat']
-        self.pwd = kwargs['pwd']
+        if 'pwd' in kwargs:
+            self.pwd = kwargs['pwd']
 
     def is_suspended( self ):
         return 'T' == self.stat

@@ -3,33 +3,50 @@ import re
 import subprocess
 import collections
 import logging
+import vimsaver.psjobs as psjobs
 from vimsaver.multiplexers import Multiplexer
 
 ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
 
-PATTERN_PTS_SCREEN = re.compile( r':\S*:S.(?P<screen>[0-9]*)' )
+PATTERN_PTS_SCREEN = re.compile( r':(?P<parent>\S*):S.(?P<screen>[0-9]*)' )
 PATTERN_SCREEN_NUMBER = re.compile(
     r'(?P<idx>[0-9]*)\s*\((?P<title>[A-Za-z0-9]*)\)' )
 
 class GNUScreen( Multiplexer ):
 
-    @staticmethod
-    def window_from_pty( pty_from : str ) -> int:
+    def window_from_pty( self, pty_from : str ) -> int:
 
         logger = logging.getLogger( 'multiplexers.gnu_screen.window_from_pty' )
 
         pty_screen = PATTERN_PTS_SCREEN.match( pty_from )
+
+        # Weed out screens with other session names.
+        if pty_screen['parent'] != self.session_pty:
+            logger.debug( '%s not in screen %s', pty_from, self.session_pty )
+            return -1
+
         if not pty_screen:
-            return None
+            logger.debug( 'no match found for ' + pty_from )
+            return -1
 
         window_num = int( pty_screen.group( 'screen' ) )
 
-        logger.debug( 'PTY %s is screen: %d', pty_from, window_num )
+        logger.debug( 'PTY %s is window: %d', pty_from, window_num )
 
         return window_num
 
     def __init__( self, session : str ):
         self.session = session
+        self.session_pty = None
+
+        # Find the master proc.
+        for sess_proc in psjobs.PTY.find_ps( '-S ' + self.session ):
+            assert( None == self.session_pty ) # Only one!
+            self.session_pty = sess_proc.pty
+
+        if None == self.session_pty:
+            raise Exception( "Could not find screen for session: " + session + \
+                " was it resumed without -S?" )
 
     def screen_command( self, window : int, command : list ):
         logger = logging.getLogger( 'multiplexers.gnu_screen.command' )

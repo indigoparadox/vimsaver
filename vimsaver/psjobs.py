@@ -3,6 +3,7 @@ import re
 import logging
 import subprocess
 import collections
+import vimsaver
 
 PATTERN_W = re.compile(
     r'\S*\s*(?P<tty>pts\/[0-9]*)\s*(?P<from>:pts\S*)\s*\S*\s*(?P<cli>.*)' )
@@ -92,6 +93,31 @@ class PTY( object ):
                 logger.exception( e )
 
         return lines_out
+    
+    def check_resume( self, ps, multiplexer, win_pty_idx ):
+        
+        ''' Given a process, make sure it's in the foreground. '''
+
+        logger = logging.getLogger( 'pty.check_resume' )
+
+        if not ps.is_suspended():
+            # Process is already in the foreground!
+            return
+
+        if not self.fg_ps().has_cli( 'bash' ):
+            logger.warning(
+                'don\'t know how to resume from: %s', self.fg_ps().cli[0] )
+            raise vimsaver.SkipException()
+
+        logger.debug( 'attempting to resume %s...', ps.cli[0] )
+        # Bring vim back to front!
+        multiplexer.send_shell( ['fg'], win_pty_idx )
+
+        # Start from the beginning to see if vim was
+        # brought forward.
+        # TODO: Can we get the job number to make
+        #       sure it is?
+        raise vimsaver.TryAgainException()
 
     def fg_ps( self ):
         

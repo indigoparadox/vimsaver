@@ -17,11 +17,56 @@ from importlib import import_module
 
 PATTERN_HISTORY = re.compile( r'\s*(?P<idx>[0-9]*)\s*(?P<cli>.*)' )
 
-def vim_command( servername : str, command : str ):
-    vip = subprocess.run(
-        ['vim', '--remote-send', command, '--servername', servername] )
+def innerloop_save( screen_list, ps, pty, win_pty_idx, **kwargs ):
 
-def do_save( **kwargs ):
+    logger = logging.getLogger( 'innerloop.save' )
+    multiplexer = import_module( kwargs['multiplexer'] )
+    multiplexer_i = multiplexer.MULTIPLEXER_CLASS( kwargs['session'] )
+
+    for app_handler in kwargs['appstates']:
+
+        if not app_handler.APPSTATE_CLASS.is_ps( ps ):
+            continue
+
+        pty.check_resume( ps, multiplexer_i, win_pty_idx )
+
+        # Perform the save.
+        app_instance = app_handler.APPSTATE_CLASS( ps, **kwargs )
+
+        buffers = app_instance.save_buffers()
+        screen_list[win_pty_idx] = {
+            'pwd': ps.pwd,
+            'app': app_instance.module_path,
+            'title': app_instance.server_name,
+            'buffers': {app_instance.server_name: \
+                [dict( x._asdict() ) for x in buffers]}
+        }
+
+def innerloop_quit( screen_list, ps, pty, win_pty_idx, **kwargs ):
+
+    logger = logging.getLogger( 'innerloop.quit' )
+    multiplexer = import_module( kwargs['multiplexer'] )
+    multiplexer_i = multiplexer.MULTIPLEXER_CLASS( kwargs['session'] )
+
+    for app_handler in kwargs['appstates']:
+        if not app_handler.APPSTATE_CLASS.is_ps( ps ):
+            continue
+
+        pty.check_resume( ps, multiplexer_i, win_pty_idx )
+
+        # Perform the quit.
+        app_instance = app_handler.APPSTATE_CLASS( ps, **kwargs )
+
+        app_instance.quit()
+
+    if not pty.fg_ps().has_cli( 'bash' ):
+        logger.warning( 'don\'t know how to quit on: %s', pty.fg_is().cli[0] )
+        raise vimsaver.SkipException()
+
+    logger.debug( 'attempting to quit %s...', ps.cli[0] )
+    multiplexer_i.send_shell( ['exit'], win_pty_idx )
+
+def do_op( op_innerloop, **kwargs ):
 
     logger = logging.getLogger( 'save' )
 
@@ -31,7 +76,6 @@ def do_save( **kwargs ):
     #temp_dir = tempfile.mkdtemp( prefix='vimsaver' )
     #logger.debug( 'created temp dir: %s', temp_dir )
     done_trying = False
-    screen_list = []
     while not done_trying:
         done_trying = True
         try:
@@ -39,50 +83,16 @@ def do_save( **kwargs ):
             for pty in psjobs.PTY.list_all():
 
                 # Make sure pty is from screen with our session.
-                pty_screen = multiplexer_i.window_from_pty( pty.parent )
-                if 0 > pty_screen:
+                win_pty_idx = multiplexer_i.window_from_pty( pty.parent )
+                if 0 > win_pty_idx:
                     continue
 
-                # Build the vim buffer list.
                 for ps in pty.list_ps():
 
+                    # Build the vim buffer list.
                     try:
-                        for app in kwargs['appstates']:
-                            if not app.APPSTATE_CLASS.is_ps( ps ):
-                                continue
-
-                            # Check if we need to resume the process.
-                            if ps.is_suspended():
-                                if pty.fg_ps().has_cli( 'bash' ):
-                                    logger.debug(
-                                        'attempting to resume %s...',
-                                        ps.cli[0] )
-                                    # Bring vim back to front!
-                                    multiplexer_i.send_shell(
-                                        ['fg'], pty_screen )
-
-                                    # Start from the beginning to see if vim was
-                                    # brought forward.
-                                    # TODO: Can we get the job number to make
-                                    #       sure it is?
-                                    raise vimsaver.TryAgainException()
-                                else:
-                                    logger.warning(
-                                        'don\'t know how to suspend: %s',
-                                        ps.cli[0] )
-                                    raise vimsaver.SkipException()
-
-                            # Perform the save.
-                            app_instance = app.APPSTATE_CLASS( ps, **kwargs )
-
-                            buffers = app_instance.save_buffers()
-                            screen_list[pty_screen] = {
-                                'pwd': ps.pwd,
-                                'app': app_instance.module_path,
-                                'title': app_instance.server_name,
-                                'buffers': {app_instance.server_name: \
-                                    [dict( x._asdict() ) for x in buffers]}
-                            }
+                        op_innerloop(
+                            screen_list, ps, pty, win_pty_idx, **kwargs )
                     except vimsaver.SkipException:
                         continue
 
@@ -96,10 +106,11 @@ def do_save( **kwargs ):
 
     pprint.pprint( screen_list )
 
-    with open( kwargs['outfile'], 'w' ) as outfile_f:
-        outfile_f.write( json.dumps( screen_list ) )
+    if 'outfile' in kwargs:
+        with open( kwargs['outfile'], 'w' ) as outfile_f:
+            outfile_f.write( json.dumps( screen_list ) )
 
-def do_load( **kwargs ):
+def do_load( op_func, **kwargs ):
 
     logger = logging.getLogger( 'load' )
 
@@ -153,60 +164,6 @@ def do_load( **kwargs ):
                     ['vim', '--servername', server, '-p'] + buffer_list,
                     int( screen ) )
 
-def do_quit( **kwargs ):
-
-    logger = logging.getLogger( 'quit' )
-
-    multiplexer = import_module( kwargs['multiplexer'] )
-    multiplexer_i = multiplexer.MULTIPLEXER_CLASS( kwargs['session'] )
-
-    done_trying = False
-
-    while not done_trying:
-        done_trying = True
-        try:
-            screen_list = {}
-            for pty in psjobs.PTY.list_all():
-                
-                # Make sure pty is from screen with our session.
-                pty_screen = multiplexer_i.window_from_pty( pty.parent )
-                if 0 > pty_screen:
-                    continue
-
-                for ps in pty.list_ps():
-                    
-                    for app in kwargs['appstates']:
-                        if not app.APPSTATE_CLASS.is_ps( ps ):
-                            continue
-
-                        # Check if we need to resume the process.
-                        if ps.is_suspended():
-                            if pty.fg_ps().has_cli( 'bash' ):
-                                logger.debug(
-                                    'attempting to resume %s...',
-                                    ps.cli[0] )
-                                # Bring vim back to front!
-                                multiplexer_i.send_shell( ['fg'], pty_screen )
-                                raise vimsaver.TryAgainException()
-                            else:
-                                logger.warning(
-                                    'don\'t know how to suspend: %s',
-                                    ps.cli[0] )
-                                raise vimsaver.SkipException()
-
-                        app_instance.quit()
-
-                    if pty.fg_ps().has_cli( 'bash' ):
-                        logger.debug(
-                            'attempting to quit %s...',
-                            ps.cli[0] )
-                        multiplexer_i.send_shell(
-                            ['exit'], pty_screen )
-
-        except vimsaver.TryAgainException:
-            logger.debug( 'we should try again!' )
-            done_trying = False
-
 def main():
 
     parser = argparse.ArgumentParser()
@@ -233,17 +190,17 @@ def main():
 
     parser_save.add_argument( '-o', '--outfile', default='vimsaver.json' )
 
-    parser_save.set_defaults( func=do_save )
+    parser_save.set_defaults( func=do_op, op=innerloop_save )
 
     parser_load = subparsers.add_parser( 'load' )
 
     parser_load.add_argument( '-i', '--infile', default='vimsaver.json' )
 
-    parser_load.set_defaults( func=do_load )
+    parser_load.set_defaults( func=do_load, op=None )
 
     parser_quit = subparsers.add_parser( 'quit' )
 
-    parser_quit.set_defaults( func=do_quit )
+    parser_quit.set_defaults( func=do_op, op=innerloop_quit )
 
     args = parser.parse_args()
 
@@ -254,7 +211,7 @@ def main():
     logger = logging.getLogger( 'main' )
 
     args_arr = vars( args )
-    args.func( **args_arr )
+    args.func( args.op, **args_arr )
 
 if '__main__' == __name__:
     main()

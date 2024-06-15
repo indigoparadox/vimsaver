@@ -90,7 +90,7 @@ class VimState( AppState ):
 
         return lines_out
 
-    def _vim_command( servername : str, command : str ):
+    def _vim_command( self, servername : str, command : str ):
         vip = subprocess.run(
             ['vim', '--remote-send', command, '--servername', servername] )
 

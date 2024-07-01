@@ -44,6 +44,8 @@ def innerloop_save( screen_list, ps, pty, win_pty_idx, **kwargs ):
 
 def innerloop_quit( screen_list, ps, pty, win_pty_idx, **kwargs ):
 
+    assert( None != pty )
+
     logger = logging.getLogger( 'innerloop.quit' )
     multiplexer = import_module( kwargs['multiplexer'] )
     multiplexer_i = multiplexer.MULTIPLEXER_CLASS( kwargs['session'] )
@@ -59,8 +61,9 @@ def innerloop_quit( screen_list, ps, pty, win_pty_idx, **kwargs ):
 
         app_instance.quit()
 
-    if not pty.fg_ps().has_cli( 'bash' ):
-        logger.warning( 'don\'t know how to quit on: %s', pty.fg_is().cli[0] )
+    if pty.fg_ps() and not pty.fg_ps().has_cli( 'bash' ):
+        logger.warning( 'don\'t know how to quit on: %s',
+            pty.fg_ps().cli[0] )
         raise vimsaver.SkipException()
 
     logger.debug( 'attempting to quit %s...', ps.cli[0] )

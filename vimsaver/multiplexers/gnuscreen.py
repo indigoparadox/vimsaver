@@ -48,7 +48,7 @@ class GNUScreen( Multiplexer ):
             raise Exception( "Could not find screen for session: " + session + \
                 " was it resumed without -S?" )
 
-    def screen_command( self, window : int, command : list ):
+    def _screen_command( self, window : int, command : list ):
         logger = logging.getLogger( 'multiplexers.gnu_screen.command' )
         screenc = ['screen', '-S', self.session, '-X']
         if 0 <= window:
@@ -83,12 +83,12 @@ class GNUScreen( Multiplexer ):
         logger = logging.getLogger( 'multiplexers.gnu_screen.send_shell' )
         logger.debug( 'sending shell command: %s', str( command ) )
         command[-1] =  command[-1] + '^M'
-        self.screen_command( window, ['stuff'] + [' '.join( command )] )
+        self._screen_command( window, ['stuff'] + [' '.join( command )] )
 
     def new_window( self, window : int ):
         logger = logging.getLogger( 'multiplexers.gnu_screen.new_window' )
         logger.debug( 'opening window %s in screen...', window )
-        self.screen_command( -1, ['screen', window] )
+        self._screen_command( -1, ['screen', window] )
 
 MULTIPLEXER_CLASS = GNUScreen
 

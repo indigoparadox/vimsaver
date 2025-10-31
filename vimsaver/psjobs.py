@@ -85,8 +85,9 @@ class PTY( object ):
                 # Get PWD.
                 pwdp = subprocess.Popen(
                     ['pwdx', match['pid']], stdout=subprocess.PIPE )
-                match['pwd'] = \
-                    pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )[1].strip()
+                pwd_arr = pwdp.stdout.read().decode( 'utf-8' ).split( ' ' )
+                #print( pwd_arr )
+                match['pwd'] = pwd_arr[1].strip()
 
                 lines_out.append( PS( **match ) )
             except IndexError as e:

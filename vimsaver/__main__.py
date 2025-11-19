@@ -131,10 +131,8 @@ def do_load( op_func, **kwargs ):
         for screen in screen_state:
             pwd = screen_state[screen]['pwd']
 
-            # Create window if missing.
-            if not multiplexer_i.get_window_title( screen ):
-                logger.debug( 'screen %s not found in window list', screen )
-                multiplexer_i.new_window( screen )
+            # The multiplexer should handle detecting whether it's already open.
+            multiplexer_i.new_window( screen )
 
             multiplexer_i.set_window_title(
                 screen, screen_state[screen]['title'] )

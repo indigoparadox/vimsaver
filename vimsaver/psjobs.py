@@ -9,7 +9,7 @@ PATTERN_W = re.compile(
     r'\S*\s*(?P<tty>pts\/[0-9]*)\s*(?P<from>:pts\S*)\s*\S*\s*(?P<cli>.*)' )
 PATTERN_PS = re.compile(
     r'\s*(?P<pid>[0-9]+)\s*(?P<pty>[a-zA-Z0-9\/]+)\s*(?P<stat>\S+)\s*(?P<cli>.*)' )
- 
+
 PSTuple = collections.namedtuple(
     'PSTuple', ['pid', 'pty', 'stat', 'cli', 'pwd'] )
 
@@ -94,9 +94,9 @@ class PTY( object ):
                 logger.exception( e )
 
         return lines_out
-    
+
     def check_resume( self, ps, multiplexer, win_pty_idx ):
-        
+
         ''' Given a process, make sure it's in the foreground. '''
 
         logger = logging.getLogger( 'pty.check_resume' )
@@ -121,9 +121,9 @@ class PTY( object ):
         raise vimsaver.TryAgainException()
 
     def fg_ps( self ):
-        
+
         for ps in self.list_ps():
-            
+
             # TODO: Gracefully avoid other processes?
             #print( ps.cli )
 
@@ -147,4 +147,3 @@ class PS( object ):
 
     def has_cli( self, command : str ):
         return -1 != self.cli[0].find( command )
-

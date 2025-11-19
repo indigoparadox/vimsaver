@@ -3,16 +3,36 @@ import re
 import subprocess
 import collections
 import logging
-import vimsaver.psjobs as psjobs
 from vimsaver.multiplexers import Multiplexer
+from vimsaver.multiplexers import PTY
 
 ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
 
+PATTERN_W = re.compile(
+    r'\S*\s*(?P<tty>pts\/[0-9]*)\s*(?P<from>:pts\S*)\s*\S*\s*(?P<cli>.*)' )
 PATTERN_PTS_SCREEN = re.compile( r':(?P<parent>\S*):S.(?P<screen>[0-9]*)' )
 PATTERN_SCREEN_NUMBER = re.compile(
     r'(?P<idx>[0-9]*)\s*\((?P<title>[A-Za-z0-9]*)\)' )
 
 class GNUScreen( Multiplexer ):
+
+    def list_windows( self ) -> PTY:
+
+        logger = logging.getLogger( 'multiplexers.gnu_screen.list_pts' )
+
+        wp = subprocess.Popen( ['w', '-s'], stdout=subprocess.PIPE )
+
+        lines_out = []
+        for line in wp.stdout.readlines():
+            # TODO: Use re.match.
+            match = PATTERN_W.match( line.decode( 'utf-8' ) )
+            if not match:
+                continue
+            match = match.groupdict()
+
+            logger.debug( 'line: %s', str( match ) )
+
+            yield PTY( **match )
 
     def window_from_pty( self, pty_from : str ) -> int:
 

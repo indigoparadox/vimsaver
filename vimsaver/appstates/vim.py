@@ -16,7 +16,7 @@ class VimState( AppState ):
 
     module_path = 'vimsaver.appstates.vim'
 
-    def __init__( self, ps : vimsaver.psjobs.PS, **kwargs ):
+    def __init__( self, ps : vimsaver.multiplexers.PS, **kwargs ):
         if ps:
             self.server_name = ps.cli[2]
         elif 'server_name' in kwargs:

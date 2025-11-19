@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 
-import subprocess
 import re
-import collections
 import json
 import argparse
 import pprint
-import tempfile
-import os
-import shutil
 import logging
-import time
 import vimsaver.multiplexers
-import vimsaver.psjobs as psjobs
 from importlib import import_module
 
 PATTERN_HISTORY = re.compile( r'\s*(?P<idx>[0-9]*)\s*(?P<cli>.*)' )
 
-def innerloop_save( screen_list, ps, pty, win_pty_idx, **kwargs ):
+def innerloop_save(
+    screen_list : dict, ps : vimsaver.multiplexers.PS,
+    window : vimsaver.multiplexers.Window, **kwargs
+):
 
     logger = logging.getLogger( 'innerloop.save' )
     multiplexer = import_module( kwargs['multiplexer'] )
@@ -28,13 +24,13 @@ def innerloop_save( screen_list, ps, pty, win_pty_idx, **kwargs ):
         if not app_handler.APPSTATE_CLASS.is_ps( ps ):
             continue
 
-        pty.check_resume( ps, multiplexer_i, win_pty_idx )
+        window.check_resume( ps )
 
         # Perform the save.
         app_instance = app_handler.APPSTATE_CLASS( ps, **kwargs )
 
         buffers = app_instance.save_buffers()
-        screen_list[win_pty_idx] = {
+        screen_list[window.index] = {
             'pwd': ps.pwd,
             'app': app_instance.module_path,
             'title': app_instance.server_name,
@@ -83,19 +79,12 @@ def do_op( op_innerloop, **kwargs ):
         done_trying = True
         try:
             screen_list = {}
-            for pty in psjobs.PTY.list_all():
-
-                # Make sure pty is from screen with our session.
-                win_pty_idx = multiplexer_i.window_from_pty( pty.parent )
-                if 0 > win_pty_idx:
-                    continue
-
-                for ps in pty.list_ps():
+            for window in multiplexer_i.list_windows():
+                for ps in window.list_ps():
 
                     # Build the vim buffer list.
                     try:
-                        op_innerloop(
-                            screen_list, ps, pty, win_pty_idx, **kwargs )
+                        op_innerloop( screen_list, ps, window, **kwargs )
                     except vimsaver.SkipException:
                         continue
 

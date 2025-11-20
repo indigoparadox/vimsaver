@@ -3,8 +3,7 @@ import re
 import subprocess
 import collections
 import logging
-from vimsaver.multiplexers import Multiplexer
-from vimsaver.multiplexers import PTY
+from vimsaver.multiplexers import Multiplexer, Window, PATTERN_PS, PS
 
 ScreenWinTuple = collections.namedtuple( 'ScreenWinTuple', ['idx', 'title'] )
 
@@ -16,23 +15,47 @@ PATTERN_SCREEN_NUMBER = re.compile(
 
 class GNUScreen( Multiplexer ):
 
-    def list_windows( self ) -> PTY:
+    def find_ps( self, command : str ) -> list:
 
-        logger = logging.getLogger( 'multiplexers.gnu_screen.list_pts' )
+        ''' Find all processes with "command" in their command line. '''
+
+        logger = logging.getLogger( 'multiplexers.gnu_screen.find_ps' )
+
+        psp = subprocess.Popen(
+            ['ps', '-a', '-o', 'pid,tty,stat,args'],
+            stdout=subprocess.PIPE )
+
+        # Process raw ps command output.
+        lines_out = []
+        for line in psp.stdout.readlines():
+            match = PATTERN_PS.match( line.decode( 'utf-8' ) )
+            if not match:
+                continue
+            match = match.groupdict()
+
+            if not command in match['cli']:
+                continue
+
+            yield PS( **match )
+
+    def list_windows( self ) -> Window:
+
+        logger = logging.getLogger( 'multiplexers.gnu_screen.list_windows' )
 
         wp = subprocess.Popen( ['w', '-s'], stdout=subprocess.PIPE )
 
         lines_out = []
         for line in wp.stdout.readlines():
             # TODO: Use re.match.
-            match = PATTERN_W.match( line.decode( 'utf-8' ) )
-            if not match:
+            match_w = PATTERN_W.match( line.decode( 'utf-8' ) )
+            if not match_w:
                 continue
-            match = match.groupdict()
+            match_w = match_w.groupdict()
 
-            logger.debug( 'line: %s', str( match ) )
+            logger.debug( 'line: %s', str( match_w ) )
 
-            yield PTY( **match )
+            yield Window( multiplexer=self, index=int( line_arr[0] ), name=line_arr[1],
+                pid=int( line_arr[2] ), tty=line_arr[3] )
 
     def window_from_pty( self, pty_from : str ) -> int:
 
@@ -59,8 +82,8 @@ class GNUScreen( Multiplexer ):
         self.session = session
         self.session_pty = None
 
-        # Find the master proc.
-        for sess_proc in psjobs.PTY.find_ps( '-S ' + self.session ):
+        # Find the master proc belonging to screen.
+        for sess_proc in self.find_ps( '-S ' + self.session ):
             assert( None == self.session_pty ) # Only one!
             self.session_pty = sess_proc.pty
 
@@ -95,7 +118,7 @@ class GNUScreen( Multiplexer ):
 
     def set_window_title( self, idx : int, title : str ) -> None:
 
-        screenp = subprocess.Popen(
+        subprocess.check_call(
             ['screen', '-S', self.session, '-p', idx, '-X', 'title', title],
             stdout=subprocess.PIPE )
 
@@ -105,7 +128,7 @@ class GNUScreen( Multiplexer ):
         command[-1] =  command[-1] + '^M'
         self._screen_command( window, ['stuff'] + [' '.join( command )] )
 
-    def new_window( self, window : int ) -> None:
+    def new_window( self, idx : int ) -> None:
         logger = logging.getLogger( 'multiplexers.gnu_screen.new_window' )
         logger.debug( 'opening window %s in screen...', window )
         self._screen_command( -1, ['screen', window] )

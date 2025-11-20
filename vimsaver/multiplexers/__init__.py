@@ -54,30 +54,6 @@ class PS( object ):
 
 class Window( object ):
 
-    @staticmethod
-    def find_ps( command : str ) -> list:
-
-        ''' Find all processes with "command" in their command line. '''
-
-        logger = logging.getLogger( 'pty.find_ps' )
-
-        psp = subprocess.Popen(
-            ['ps', '-a', '-o', 'pid,tty,stat,args'],
-            stdout=subprocess.PIPE )
-
-        # Process raw ps command output.
-        lines_out = []
-        for line in psp.stdout.readlines():
-            match = PATTERN_PS.match( line.decode( 'utf-8' ) )
-            if not match:
-                continue
-            match = match.groupdict()
-
-            if not command in match['cli']:
-                continue
-
-            yield PS( **match )
-
     def __init__(
         self, multiplexer : Multiplexer, name : str, pid : int, tty : str, index : int
     ):

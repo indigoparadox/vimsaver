@@ -38,32 +38,34 @@ def innerloop_save(
                 [dict( x._asdict() ) for x in buffers]}
         }
 
-def innerloop_quit( screen_list, ps, pty, win_pty_idx, **kwargs ):
-
-    assert( None != pty )
+def innerloop_quit(
+    screen_list : dict, ps : vimsaver.multiplexers.PS,
+    window : vimsaver.multiplexers.Window, **kwargs
+):
 
     logger = logging.getLogger( 'innerloop.quit' )
     multiplexer = import_module( kwargs['multiplexer'] )
     multiplexer_i = multiplexer.MULTIPLEXER_CLASS( kwargs['session'] )
 
     for app_handler in kwargs['appstates']:
+
         if not app_handler.APPSTATE_CLASS.is_ps( ps ):
             continue
 
-        pty.check_resume( ps, multiplexer_i, win_pty_idx )
+        window.check_resume( ps )
 
         # Perform the quit.
         app_instance = app_handler.APPSTATE_CLASS( ps, **kwargs )
 
         app_instance.quit()
 
-    if pty.fg_ps() and not pty.fg_ps().has_cli( 'bash' ):
+    if window.fg_ps() and not window.fg_ps().has_cli( 'bash' ):
         logger.warning( 'don\'t know how to quit on: %s',
-            pty.fg_ps().cli[0] )
+            window.fg_ps().cli[0] )
         raise vimsaver.SkipException()
 
     logger.debug( 'attempting to quit %s...', ps.cli[0] )
-    multiplexer_i.send_shell( ['exit'], win_pty_idx )
+    multiplexer_i.send_shell( ['exit'], window.index )
 
 def do_op( op_innerloop, **kwargs ):
 
@@ -165,7 +167,7 @@ def main():
 
     parser.add_argument(
         '-m', '--multiplexer', action='store',
-        default='vimsaver.multiplexers.gnuscreen' )
+        default='vimsaver.multiplexers.tmux' )
 
     parser.add_argument(
         '-a', '--appstates', action='append', type=import_module,
